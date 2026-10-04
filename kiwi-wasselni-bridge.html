@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>وصّلني | جسر الربط مع KIWI</title>
+<style>
+body{margin:0;background:#f4efe8;color:#2b241f;font-family:Arial,Tahoma,sans-serif}.wrap{max-width:900px;margin:auto;padding:20px}.card{background:#fff;border:1px solid #e2d6c7;border-radius:20px;padding:18px;margin:12px 0;box-shadow:0 8px 28px #0000000a}h1{margin:0;color:#8d4f32}.muted{color:#746b63;font-size:13px;line-height:1.8}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field{display:grid;gap:5px;font-size:12px;font-weight:800}.field input{padding:11px;border:1px solid #d8cec2;border-radius:10px}.btn{border:0;border-radius:12px;padding:12px 16px;background:#8d4f32;color:#fff;font-weight:900;cursor:pointer}.status{padding:12px;border-radius:12px;background:#f7f1e8;margin-top:12px}.log{max-height:360px;overflow:auto;background:#151515;color:#ddd;border-radius:12px;padding:12px;font:12px monospace;direction:ltr;text-align:left;white-space:pre-wrap}@media(max-width:650px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body><main class="wrap">
+<div class="card"><h1>🔗 جسر وصّلني ↔ KIWI</h1><p class="muted">هذه الصفحة هي طبقة الربط فقط. وصّلني لا يضم ملفات KIWI ولا يعتمد على واجهاته. الجسر يقرأ طلبات التوصيل من Firestore ويحوّلها إلى نسخة مستقلة داخل قاعدة وصّلني.</p></div>
+<div class="card"><div class="grid">
+<label class="field">رابط Supabase الخاص بوصّلني<input id="sbUrl" value="https://ogiflmvzizvupdphxxon.supabase.co"></label>
+<label class="field">Publishable Key<input id="sbKey" value="sb_publishable_TJxZmbtpLDu5dI-ygeVEzA_j3YFh--7"></label>
+</div><div style="margin-top:12px"><button class="btn" id="start">▶ تشغيل الربط</button> <button class="btn" id="stop" style="background:#555">إيقاف</button></div><div id="status" class="status">متوقف</div></div>
+<div class="card"><b>السجل</b><div id="log" class="log"></div></div>
+</main>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
+<script>
+const FIREBASE_CONFIG={apiKey:"AIzaSyAQ9WanOBynjUbozIcWQrhDBCT82-RqMMU4",authDomain:"kiwiresturant-30ff4.firebaseapp.com",projectId:"kiwiresturant-30ff4",storageBucket:"kiwiresturant-30ff4.firebasestorage.app",messagingSenderId:"329950339210",appId:"1:329950339210:web:bd072d9d7171a2d6ec4d73",measurementId:"G-K916WX9ZH8"};
+firebase.initializeApp(FIREBASE_CONFIG);const fs=firebase.firestore();
+let running=false,unsub=null,poll=null;const $=id=>document.getElementById(id);
+function log(x){$('log').textContent=new Date().toLocaleTimeString('ar-IQ')+'  '+x+'\n'+$('log').textContent}
+function mapStatus(o){const s=String(o.deliveryStatus||o.status||'pending');return ({pending:'pending',approved:'accepted',preparing:'preparing',ready:'ready',assigned:'picked_up',out_for_delivery:'picked_up',delivered:'delivered',cancelled:'cancelled'})[s]||'pending'}
+function items(o){return Array.isArray(o.items)?o.items.map(x=>({name:x.name||x.title||'صنف',price:Number(x.price||0),qty:Number(x.qty||x.quantity||1),note:x.note||'',department:x.department||''})):[]}
+async function api(path,options={}){const base=$('sbUrl').value.replace(/\/$/,'');const key=$('sbKey').value.trim();const r=await fetch(base+'/rest/v1/'+path,{...options,headers:{apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json','Prefer':'return=representation',...(options.headers||{})}});const t=await r.text();let d=null;try{d=t?JSON.parse(t):null}catch(e){d=t}if(!r.ok)throw new Error(d?.message||d?.hint||t||('HTTP '+r.status));return d}
+async function syncDoc(doc){const o=doc.data()||{};if(o.order_type!=='delivery' && !o.deliveryStatus && !o.deliveryLocation)return;const id='KIWI-'+doc.id;const row={id,order_code:doc.id,source_system:'kiwi',source_order_id:doc.id,restaurant_name:'KIWI',customer_name:o.customerName||o.customer_name||o.customer||'زبون KIWI',customer:o.customerName||o.customer_name||o.customer||'زبون KIWI',phone:o.customerPhone||o.customerContact?.phone||o.phone||'',address:o.deliveryLocation||o.customerContact?.location||o.address||'',landmark:o.landmark||o.customerContact?.landmark||'',payment_method:o.paymentMethod||'cash',payment:o.paymentMethod||'cash',items:items(o),total:Number(o.total||0),delivery_fee:Number(o.deliveryFee||0),note:o.note||'',status:mapStatus(o),restaurant_status:mapStatus(o),driver_status:o.driverId?'assigned':'waiting',driver_id_text:o.driverId||null,driver_name:o.driverName||null,invoice_number:o.invoiceNumber||null,updated_at:new Date().toISOString()};
+let existing=await api('orders?select=id&id=eq.'+encodeURIComponent(id));if(existing&&existing.length){await api('orders?id=eq.'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify(row)})}else{row.created_at=o.createdAt?.toDate?.()?.toISOString?.()||new Date().toISOString();await api('orders',{method:'POST',body:JSON.stringify(row)})}log('تمت مزامنة طلب '+doc.id+' → '+row.status);}
+async function syncAll(){const snap=await fs.collection('orders').where('order_type','==','delivery').limit(200).get();for(const d of snap.docs){try{await syncDoc(d)}catch(e){log('خطأ '+d.id+': '+e.message)}}$('status').textContent='يعمل • آخر مزامنة '+new Date().toLocaleTimeString('ar-IQ')}
+async function start(){if(running)return;running=true;$('status').textContent='جاري التشغيل…';try{await syncAll();unsub=fs.collection('orders').where('order_type','==','delivery').onSnapshot(async s=>{for(const d of s.docChanges()){if(d.type==='added'||d.type==='modified'){try{await syncDoc(d.doc)}catch(e){log('خطأ '+d.doc.id+': '+e.message)}}}});poll=setInterval(()=>syncAll().catch(e=>log('خطأ بالمزامنة: '+e.message)),15000);log('الجسر يعمل الآن')}catch(e){running=false;$('status').textContent='خطأ: '+e.message;log(e.message)}}
+function stop(){running=false;if(unsub)unsub();if(poll)clearInterval(poll);unsub=null;poll=null;$('status').textContent='متوقف';log('تم إيقاف الجسر')}
+$('start').onclick=start;$('stop').onclick=stop;
+</script></body></html>
